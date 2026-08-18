@@ -1719,11 +1719,33 @@ async function probeUrl(url, opts = {}) {
   if (!hostAllowed(url)) return { error: 'That host is not on the allow-list: ' + url };
   const jar = new Map();
   const started = Date.now();
+  const notes = [];
   try {
-    const { res, body, hops, finalUrl, error } = await get(url, jar, {
-      method: opts.method, body: opts.body, headers: opts.headers
-    });
-    if (error) return { url, hops, error };
+    // Optional warm-up requests share the cookie jar. Portals that hand out an
+    // anonymous session on first contact need this: a POST sent cold is bounced
+    // to the login handler and its body is discarded by the redirect.
+    for (const w of [].concat(opts.warmup || [])) {
+      if (!hostAllowed(w)) return { url, error: 'Warm-up host not on the allow-list: ' + w };
+      const r = await get(w, jar);
+      notes.push({ warmup: w, status: r.res ? r.res.status : 0, cookies: [...jar.keys()] });
+    }
+
+    const request = { method: opts.method, body: opts.body, headers: opts.headers };
+    let { res, body, hops, finalUrl, error } = await get(url, jar, request);
+
+    // If we were redirected through a login/session handler and picked up
+    // cookies on the way, the original request never really ran. Now that the
+    // jar is populated, run it once more for real.
+    const bouncedToLogin = hops && hops.length > 1 &&
+      hops.some(h => /login|signin|default\.aspx/i.test(h.url)) &&
+      hops.some(h => h.setCookies > 0);
+    if (!error && bouncedToLogin && jar.size) {
+      notes.push({ retry: 'session established, repeating the request', cookies: [...jar.keys()] });
+      const again = await get(url, jar, request);
+      if (!again.error) ({ res, body, hops, finalUrl } = again);
+    }
+
+    if (error) return { url, hops, notes, error };
     const html = body || '';
     const base = finalUrl || url;
     const out = {
@@ -1734,7 +1756,9 @@ async function probeUrl(url, opts = {}) {
       title: title(html),
       cookies: [...jar.keys()],
       hops,
+      notes,
       botWall: looksLikeBotWall(html),
+      captcha: /recaptcha|hcaptcha|CaptchaEnabled"\s*:\s*true/i.test(html),
       aspnet: /__VIEWSTATE/.test(html),
       forms: forms(html, base),
       links: links(html, base),
@@ -1846,7 +1870,7 @@ return { q, pool, init, DEFAULT_TEMPLATE };
 })();
 
 const app = express();
-const BUILD = '2026-08-18.6';           // shown in Setup so uploads can be confirmed
+const BUILD = '2026-08-18.7';           // shown in Setup so uploads can be confirmed
 const PORT = process.env.PORT || 3000;
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const TZ = process.env.TIMEZONE || 'America/New_York';
@@ -2578,7 +2602,7 @@ async function bootProbe() {
     try {
       const out = t.url
         ? await portal.probeUrl(t.url, {
-            raw: t.raw, method: t.method, body: t.body, headers: t.headers
+            raw: t.raw, method: t.method, body: t.body, headers: t.headers, warmup: t.warmup
           })
         : await portal.probe(t.portal);
       logLong('PROBE ' + label, JSON.stringify(out));

@@ -1548,6 +1548,11 @@ async function get(url, jar, opts = {}) {
     }, opts.headers || {});
     const cookie = [...jar.entries()].map(([k, v]) => k + '=' + v).join('; ');
     if (cookie) headers.Cookie = cookie;
+    // Odyssey Public Access drives its menu by building a form in JavaScript and
+    // posting it, so form-encoded bodies are the norm here.
+    if ((opts.method || 'GET').toUpperCase() === 'POST' && opts.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    }
 
     const res = await fetch(current, {
       method: opts.method || 'GET',
@@ -1841,7 +1846,7 @@ return { q, pool, init, DEFAULT_TEMPLATE };
 })();
 
 const app = express();
-const BUILD = '2026-08-18.5';           // shown in Setup so uploads can be confirmed
+const BUILD = '2026-08-18.6';           // shown in Setup so uploads can be confirmed
 const PORT = process.env.PORT || 3000;
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const TZ = process.env.TIMEZONE || 'America/New_York';
@@ -2541,22 +2546,44 @@ function logLong(prefix, text) {
   }
 }
 
+function parseTargets(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return [];
+  // A JSON array allows full control: method, body and headers, which the
+  // comma-separated form cannot express. Anything else keeps the simple syntax.
+  if (v.startsWith('[')) {
+    try {
+      const arr = JSON.parse(v);
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      console.log('PROBE_TARGETS is not valid JSON: ' + e.message);
+      return [];
+    }
+  }
+  return v.split(',').map(s => s.trim()).filter(Boolean).map(t => {
+    const [url, mode] = t.split('|');
+    return {
+      url,
+      raw: /^raw/.test(mode || '') ? (Number((mode.split(':')[1] || 0)) || 6000) : 0
+    };
+  });
+}
+
 async function bootProbe() {
-  const targets = String(process.env.PROBE_TARGETS || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
+  const targets = parseTargets(process.env.PROBE_TARGETS);
   if (!targets.length) return;
   console.log(`=== PORTAL PROBE START: ${targets.length} target(s) ===`);
   for (const t of targets) {
+    const label = t.label || t.url || t.portal || 'target';
     try {
-      // "url|raw" or "url|raw:12000" asks for a slice of the untouched source
-      const [target, mode] = t.split('|');
-      const raw = /^raw/.test(mode || '') ? (Number((mode.split(':')[1] || 0)) || 6000) : 0;
-      const out = /^https?:\/\//i.test(target)
-        ? await portal.probeUrl(target, { raw })
-        : await portal.probe(target);
-      logLong('PROBE ' + t, JSON.stringify(out));
+      const out = t.url
+        ? await portal.probeUrl(t.url, {
+            raw: t.raw, method: t.method, body: t.body, headers: t.headers
+          })
+        : await portal.probe(t.portal);
+      logLong('PROBE ' + label, JSON.stringify(out));
     } catch (e) {
-      console.log('PROBE ' + t + ' THREW ' + (e && e.message ? e.message : String(e)));
+      console.log('PROBE ' + label + ' THREW ' + (e && e.message ? e.message : String(e)));
     }
   }
   console.log('=== PORTAL PROBE END ===');

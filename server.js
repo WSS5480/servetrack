@@ -1510,7 +1510,11 @@ const ALLOWED_HOSTS = new Set([
   'www.cameroncountytx.gov',
   'kofilequicklinks.com',
   'cameroncountycourt.org',
-  'research.txcourts.gov'
+  'research.txcourts.gov',
+  // found by probing Cameron's own county-clerk page
+  'portalprod24.co.cameron.tx.us',
+  'online.idocket.com',
+  'cameron.tx.publicsearch.us'
 ]);
 
 const PORTALS = {
@@ -1642,6 +1646,22 @@ function links(html, baseUrl) {
   return out;
 }
 
+// Script tags reveal whether a page is a JavaScript app and, often, the API it
+// talks to -- far more useful than scraping rendered HTML if endpoints exist.
+function scripts(html, baseUrl) {
+  const out = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) && out.length < 25) {
+    const src = (m[1].match(/src\s*=\s*["']([^"']+)["']/i) || [])[1];
+    if (src) out.push({ src: absolutise(baseUrl, src) || src });
+    else if (m[2] && m[2].trim().length > 40) {
+      out.push({ inline: m[2].replace(/\s+/g, ' ').trim().slice(0, 300) });
+    }
+  }
+  return out;
+}
+
 const looksLikeBotWall = html =>
   /javascript is required|enable javascript|incapsula|cloudflare|attention required|access denied|are you a human/i
     .test(String(html).slice(0, 4000));
@@ -1687,16 +1707,22 @@ async function probe(key) {
 
 // Probe an arbitrary page on an allowed host -- used to walk deeper into a
 // portal once the first probe reveals where the search page lives.
-async function probeUrl(url) {
-  if (!hostAllowed(url)) return { error: 'That host is not on the allow-list' };
+// opts.raw: include a slice of the untouched HTML. Rendered text and extracted
+// links both proved lossy on JavaScript-driven portals -- the menu links simply
+// are not anchors -- so sometimes the source itself is the only honest answer.
+async function probeUrl(url, opts = {}) {
+  if (!hostAllowed(url)) return { error: 'That host is not on the allow-list: ' + url };
   const jar = new Map();
   const started = Date.now();
   try {
-    const { res, body, hops, finalUrl, error } = await get(url, jar);
+    const { res, body, hops, finalUrl, error } = await get(url, jar, {
+      method: opts.method, body: opts.body, headers: opts.headers
+    });
     if (error) return { url, hops, error };
     const html = body || '';
-    return {
-      url, finalUrl: finalUrl || url,
+    const base = finalUrl || url;
+    const out = {
+      url, finalUrl: base,
       status: res ? res.status : 0,
       ms: Date.now() - started,
       bytes: html.length,
@@ -1705,16 +1731,19 @@ async function probeUrl(url) {
       hops,
       botWall: looksLikeBotWall(html),
       aspnet: /__VIEWSTATE/.test(html),
-      forms: forms(html, finalUrl || url),
-      links: links(html, finalUrl || url),
-      textSnippet: stripTags(html).slice(0, 700)
+      forms: forms(html, base),
+      links: links(html, base),
+      scripts: scripts(html, base),
+      textSnippet: stripTags(html).slice(0, 500)
     };
+    if (opts.raw) out.raw = html.replace(/\s+/g, ' ').slice(0, Number(opts.raw) || 6000);
+    return out;
   } catch (e) {
     return { url, ms: Date.now() - started, error: e.message || String(e) };
   }
 }
 
-return { probe, probeUrl, PORTALS, ALLOWED_HOSTS, stripTags, forms, links, title, get, looksLikeBotWall };
+return { probe, probeUrl, PORTALS, ALLOWED_HOSTS, stripTags, forms, links, scripts, title, get, looksLikeBotWall };
 
 })();
 
@@ -1812,7 +1841,7 @@ return { q, pool, init, DEFAULT_TEMPLATE };
 })();
 
 const app = express();
-const BUILD = '2026-08-18.4';           // shown in Setup so uploads can be confirmed
+const BUILD = '2026-08-18.5';           // shown in Setup so uploads can be confirmed
 const PORT = process.env.PORT || 3000;
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const TZ = process.env.TIMEZONE || 'America/New_York';
@@ -2105,7 +2134,7 @@ app.get('/api/portals', auth, admin, (req, res) =>
 app.post('/api/portal-probe', auth, admin, wrap(async (req, res) => {
   const started = Date.now();
   const out = req.body.url
-    ? await portal.probeUrl(String(req.body.url))
+    ? await portal.probeUrl(String(req.body.url), { raw: req.body.raw })
     : await portal.probe(String(req.body.portal || ''));
   console.log('portal probe', req.body.url || req.body.portal, '->',
     out.error ? 'ERROR ' + out.error : out.status + ' ' + (out.title || ''), (Date.now() - started) + 'ms');
@@ -2519,7 +2548,12 @@ async function bootProbe() {
   console.log(`=== PORTAL PROBE START: ${targets.length} target(s) ===`);
   for (const t of targets) {
     try {
-      const out = /^https?:\/\//i.test(t) ? await portal.probeUrl(t) : await portal.probe(t);
+      // "url|raw" or "url|raw:12000" asks for a slice of the untouched source
+      const [target, mode] = t.split('|');
+      const raw = /^raw/.test(mode || '') ? (Number((mode.split(':')[1] || 0)) || 6000) : 0;
+      const out = /^https?:\/\//i.test(target)
+        ? await portal.probeUrl(target, { raw })
+        : await portal.probe(target);
       logLong('PROBE ' + t, JSON.stringify(out));
     } catch (e) {
       console.log('PROBE ' + t + ' THREW ' + (e && e.message ? e.message : String(e)));

@@ -1,14 +1,13 @@
 {
   "name": "servetrack",
   "version": "1.0.0",
-  "description": "",
+  "description": "Process serving management: jobs, GPS attempts, affidavits, invoices, contractor pay",
   "main": "index.js",
   "directories": {
     "lib": "lib"
   },
   "scripts": {
-    "start": "node server.js",
-    "seed": "node seed.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",

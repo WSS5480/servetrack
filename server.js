@@ -1,12 +1,399 @@
+/* ServeTrack — process serving management.
+ *
+ * Single-file server. Bundles the barcode encoder, affidavit merge engine,
+ * database layer and schema so the whole app deploys as three files:
+ * server.js, index.html, package.json.
+ */
 const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const { q, init } = require('./db');
-const code128 = require('./code128');
-const merge = require('./merge');
+
+
+/* ------------------------------------------------ bundled: schema.sql --- */
+const SCHEMA = `-- ServeTrack schema (idempotent)
+
+CREATE TABLE IF NOT EXISTS users (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'server',   -- admin | server
+  phone         TEXT,
+  license_no    TEXT,                              -- process server registration / license
+  county        TEXT,
+  default_pay   NUMERIC(10,2) DEFAULT 0,           -- default pay per completed serve
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL,
+  contact_name  TEXT,
+  email         TEXT,
+  phone         TEXT,
+  address       TEXT,
+  default_fee   NUMERIC(10,2) DEFAULT 0,
+  notes         TEXT,
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id              SERIAL PRIMARY KEY,
+  job_number      TEXT UNIQUE,                     -- e.g. ST-10042  (also the barcode value)
+  client_id       INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  case_number     TEXT,
+  court           TEXT,
+  plaintiff       TEXT,
+  defendant       TEXT,
+  recipient_name  TEXT NOT NULL,
+  recipient_notes TEXT,                            -- description, vehicle, hours, etc.
+  address1        TEXT,
+  address2        TEXT,
+  city            TEXT,
+  state           TEXT,
+  zip             TEXT,
+  service_type    TEXT DEFAULT 'Personal',         -- Personal | Substitute | Posting | Certified Mail
+  documents       TEXT,
+  priority        TEXT DEFAULT 'Routine',          -- Routine | Rush | Same Day
+  due_date        DATE,
+  status          TEXT NOT NULL DEFAULT 'Pending', -- Pending|Assigned|Attempted|Served|Non-Est|On Hold|Cancelled
+  assigned_to     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  client_fee      NUMERIC(10,2) DEFAULT 0,
+  server_pay      NUMERIC(10,2) DEFAULT 0,
+  served_at       TIMESTAMPTZ,
+  served_manner   TEXT,
+  served_person   TEXT,
+  invoice_id      INTEGER,
+  statement_id    INTEGER,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS jobs_status_idx    ON jobs(status);
+CREATE INDEX IF NOT EXISTS jobs_assigned_idx  ON jobs(assigned_to);
+CREATE INDEX IF NOT EXISTS jobs_client_idx    ON jobs(client_id);
+
+CREATE TABLE IF NOT EXISTS attempts (
+  id            SERIAL PRIMARY KEY,
+  job_id        INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  server_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  attempted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  outcome       TEXT NOT NULL,                    -- Served | No Answer | Bad Address | Moved | Refused | Evading | Other
+  manner        TEXT,                             -- Personal | Substitute | Posted | Corporate
+  person_served TEXT,
+  relationship  TEXT,
+  description   TEXT,                             -- physical description of person served
+  notes         TEXT,
+  lat           DOUBLE PRECISION,
+  lng           DOUBLE PRECISION,
+  accuracy_m    DOUBLE PRECISION,
+  address_used  TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS attempts_job_idx ON attempts(job_id);
+
+CREATE TABLE IF NOT EXISTS affidavit_templates (
+  id           SERIAL PRIMARY KEY,
+  name         TEXT NOT NULL,
+  jurisdiction TEXT,
+  body         TEXT NOT NULL,
+  is_default   BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS statements (
+  id            SERIAL PRIMARY KEY,
+  server_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period_start  DATE NOT NULL,
+  period_end    DATE NOT NULL,
+  total         NUMERIC(10,2) NOT NULL DEFAULT 0,
+  job_count     INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'Open',     -- Open | Paid
+  paid_at       TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS invoices (
+  id            SERIAL PRIMARY KEY,
+  client_id     INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  period_start  DATE,
+  period_end    DATE,
+  total         NUMERIC(10,2) NOT NULL DEFAULT 0,
+  job_count     INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'Unpaid',   -- Unpaid | Paid
+  paid_at       TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+/* ------------------------------------------------ bundled: code128.js --- */
+const code128 = (() => {
+// Minimal Code 128-B encoder -> SVG. No dependencies.
+const PATTERNS = [
+  '11011001100','11001101100','11001100110','10010011000','10010001100','10001001100',
+  '10011001000','10011000100','10001100100','11001001000','11001000100','11000100100',
+  '10110011100','10011011100','10011001110','10111001100','10011101100','10011100110',
+  '11001110010','11001011100','11001001110','11011100100','11001110100','11101101110',
+  '11101001100','11100101100','11100100110','11101100100','11100110100','11100110010',
+  '11011011000','11011000110','11000110110','10100011000','10001011000','10001000110',
+  '10110001000','10001101000','10001100010','11010001000','11000101000','11000100010',
+  '10110111000','10110001110','10001101110','10111011000','10111000110','10001110110',
+  '11101110110','11010001110','11000101110','11011101000','11011100010','11011101110',
+  '11101011000','11101000110','11100010110','11101101000','11101100010','11100011010',
+  '11101111010','11001000010','11110001010','10100110000','10100001100','10010110000',
+  '10010000110','10000101100','10000100110','10110010000','10110000100','10011010000',
+  '10011000010','10000110100','10000110010','11000010010','11001010000','11110111010',
+  '11000010100','10001111010','10100111100','10010111100','10010011110','10111100100',
+  '10011110100','10011110010','11110100100','11110010100','11110010010','11011011110',
+  '11011110110','11110110110','10101111000','10100011110','10001011110','10111101000',
+  '10111100010','11110101000','11110100010','10111011110','10111101110','11101011110',
+  '11110101110','11010000100','11010010000','11010011100','11000111010'
+];
+const STOP = '1100011101011';
+
+function encode(text) {
+  const value = String(text || '').replace(/[^\x20-\x7E]/g, '');
+  const codes = [104]; // Start B
+  for (const ch of value) codes.push(ch.charCodeAt(0) - 32);
+  let sum = 104;
+  for (let i = 1; i < codes.length; i++) sum += codes[i] * i;
+  codes.push(sum % 103);
+  let bits = codes.map(c => PATTERNS[c]).join('') + STOP;
+  return { bits, value };
+}
+
+// Returns an SVG string for the barcode.
+function toSVG(text, { height = 60, moduleWidth = 2, showText = true } = {}) {
+  const { bits, value } = encode(text);
+  const quiet = 10 * moduleWidth;
+  const width = bits.length * moduleWidth + quiet * 2;
+  const textH = showText ? 18 : 0;
+  let rects = '';
+  let x = quiet;
+  let i = 0;
+  while (i < bits.length) {
+    let run = 1;
+    while (i + run < bits.length && bits[i + run] === bits[i]) run++;
+    if (bits[i] === '1') {
+      rects += `<rect x="${x}" y="0" width="${run * moduleWidth}" height="${height}" fill="#000"/>`;
+    }
+    x += run * moduleWidth;
+    i += run;
+  }
+  const label = showText
+    ? `<text x="${width / 2}" y="${height + 14}" font-family="monospace" font-size="13" text-anchor="middle" fill="#000">${value}</text>`
+    : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height + textH}" viewBox="0 0 ${width} ${height + textH}"><rect width="${width}" height="${height + textH}" fill="#fff"/>${rects}${label}</svg>`;
+}
+
+return { toSVG };
+
+})();
+
+/* -------------------------------------------------- bundled: merge.js --- */
+const merge = (() => {
+// Affidavit merge-field rendering.
+
+const FIELDS = [
+  ['job_number', 'Job number'],
+  ['case_number', 'Case number'],
+  ['court', 'Court name'],
+  ['plaintiff', 'Plaintiff'],
+  ['defendant', 'Defendant'],
+  ['client_name', 'Client / law firm'],
+  ['recipient_name', 'Person or entity to be served'],
+  ['recipient_notes', 'Recipient notes'],
+  ['service_address', 'Full service address'],
+  ['documents', 'Documents served'],
+  ['service_type', 'Service type ordered'],
+  ['due_date', 'Due date'],
+  ['served_date', 'Date of successful service'],
+  ['served_time', 'Time of successful service'],
+  ['served_manner', 'Manner of service (Personal, Substitute, Posted...)'],
+  ['served_person', 'Name of person actually handed the papers'],
+  ['served_description', 'Physical description of person served'],
+  ['served_gps', 'GPS coordinates recorded at service'],
+  ['attempts_list', 'Full list of attempts with date, time, outcome, GPS'],
+  ['attempt_count', 'Number of attempts made'],
+  ['server_name', 'Process server name'],
+  ['server_license', 'Process server license/registration'],
+  ['client_fee', 'Fee charged to client'],
+  ['today', "Today's date"]
+];
+
+const money = v => (v == null ? '' : '$' + Number(v).toFixed(2));
+
+function fmtDate(d, tz) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-US', {
+    timeZone: tz, year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+function fmtTime(d, tz) {
+  if (!d) return '';
+  return new Date(d).toLocaleTimeString('en-US', {
+    timeZone: tz, hour: 'numeric', minute: '2-digit'
+  });
+}
+
+function buildContext(job, attempts, server, client, tz = 'America/New_York') {
+  const addr = [
+    [job.address1, job.address2].filter(Boolean).join(' '),
+    job.city, [job.state, job.zip].filter(Boolean).join(' ')
+  ].filter(Boolean).join(', ');
+
+  const served = attempts.find(a => a.outcome === 'Served');
+  const gps = served && served.lat != null
+    ? `${Number(served.lat).toFixed(6)}, ${Number(served.lng).toFixed(6)}`
+    : '';
+
+  const list = attempts.length
+    ? attempts.map((a, i) => {
+        const g = a.lat != null ? ` [GPS ${Number(a.lat).toFixed(5)}, ${Number(a.lng).toFixed(5)}]` : '';
+        const n = a.notes ? ` - ${a.notes}` : '';
+        return `  ${i + 1}. ${fmtDate(a.attempted_at, tz)} at ${fmtTime(a.attempted_at, tz)} - ${a.outcome}${n}${g}`;
+      }).join('\n')
+    : '  No attempts recorded.';
+
+  return {
+    job_number: job.job_number || '',
+    case_number: job.case_number || '',
+    court: job.court || '',
+    plaintiff: job.plaintiff || '',
+    defendant: job.defendant || '',
+    client_name: client ? client.name : '',
+    recipient_name: job.recipient_name || '',
+    recipient_notes: job.recipient_notes || '',
+    service_address: addr,
+    documents: job.documents || '',
+    service_type: job.service_type || '',
+    due_date: fmtDate(job.due_date, tz),
+    served_date: fmtDate(job.served_at || (served && served.attempted_at), tz),
+    served_time: fmtTime(job.served_at || (served && served.attempted_at), tz),
+    served_manner: job.served_manner || (served && served.manner) || '',
+    served_person: job.served_person || (served && served.person_served) || '',
+    served_description: (served && served.description) || '',
+    served_gps: gps,
+    attempts_list: list,
+    attempt_count: String(attempts.length),
+    server_name: server ? server.name : '',
+    server_license: server && server.license_no ? `, License #${server.license_no}` : '',
+    client_fee: money(job.client_fee),
+    today: fmtDate(new Date(), tz)
+  };
+}
+
+function render(body, ctx) {
+  return String(body).replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, key) => {
+    const k = key.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(ctx, k) ? ctx[k] : m;
+  });
+}
+
+return { FIELDS, buildContext, render };
+
+})();
+
+/* ----------------------------------------------------- bundled: db.js --- */
+const { q, init } = (() => {
+const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error('DATABASE_URL is not set.');
+  process.exit(1);
+}
+
+const pool = new Pool({
+  connectionString,
+  ssl: /localhost|127\.0\.0\.1|sslmode=disable/.test(connectionString) ? false : { rejectUnauthorized: false },
+  max: 5
+});
+
+const q = (text, params) => pool.query(text, params);
+
+const DEFAULT_TEMPLATE = `AFFIDAVIT OF SERVICE
+
+{{court}}
+
+{{plaintiff}}, Plaintiff
+    vs.
+{{defendant}}, Defendant
+
+Case No. {{case_number}}
+
+STATE OF ______________  )
+                         ) ss.
+COUNTY OF ____________   )
+
+The undersigned, being first duly sworn, deposes and says that he/she is over the
+age of eighteen years, is not a party to this action, and is authorized to serve
+process in the jurisdiction where service was effected.
+
+That on {{served_date}} at {{served_time}}, at {{service_address}}, the undersigned
+served the following documents: {{documents}}
+
+upon {{recipient_name}} by {{served_manner}} service, by delivering a true and
+correct copy to {{served_person}}.
+
+Description of person served: {{served_description}}
+
+RECORD OF ATTEMPTS:
+{{attempts_list}}
+
+GPS coordinates of service: {{served_gps}}
+
+Fee for service: {{client_fee}}
+
+I declare under penalty of perjury that the foregoing is true and correct.
+
+_______________________________        Date: {{today}}
+{{server_name}}
+Process Server{{server_license}}
+
+Subscribed and sworn to before me this ______ day of ______________, 20____.
+
+_______________________________
+Notary Public`;
+
+async function init() {
+  await q(SCHEMA);
+
+  // seed admin
+  const email = (process.env.ADMIN_EMAIL || 'admin@example.com').toLowerCase();
+  const { rows } = await q('SELECT id FROM users WHERE role = $1 LIMIT 1', ['admin']);
+  if (!rows.length) {
+    const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD || 'changeme123', 10);
+    await q(
+      `INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,'admin')
+       ON CONFLICT (email) DO NOTHING`,
+      [process.env.ADMIN_NAME || 'Administrator', email, hash]
+    );
+    console.log('Seeded admin user:', email);
+  }
+
+  const t = await q('SELECT count(*)::int AS n FROM affidavit_templates');
+  if (!t.rows[0].n) {
+    await q(
+      `INSERT INTO affidavit_templates (name, jurisdiction, body, is_default)
+       VALUES ($1,$2,$3,TRUE)`,
+      ['General Affidavit of Service', 'Generic', DEFAULT_TEMPLATE]
+    );
+  }
+}
+
+return { q, pool, init, DEFAULT_TEMPLATE };
+
+})();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,16 +402,7 @@ const TZ = process.env.TIMEZONE || 'America/New_York';
 
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
-// Serve only these files from the project root — everything else is server-side.
-const PUBLIC_FILES = {
-  '/index.html': 'index.html',
-  '/client.js': 'client.js',
-  '/client.css': 'client.css',
-  '/zxing.min.js': 'zxing.min.js'
-};
-app.get(Object.keys(PUBLIC_FILES), (req, res) => {
-  res.sendFile(path.join(__dirname, PUBLIC_FILES[req.path]));
-});
+app.get('/index.html', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 /* ---------------------------------------------------------------- auth --- */
 
@@ -219,12 +597,17 @@ const JOB_FIELDS = ['client_id','case_number','court','plaintiff','defendant','r
 
 app.post('/api/jobs', auth, admin, wrap(async (req, res) => {
   const b = req.body;
-  const vals = JOB_FIELDS.map(f => (b[f] === '' || b[f] === undefined ? null : b[f]));
-  const jn = await nextJobNumber();
-  const cols = JOB_FIELDS.join(',');
-  const ph = JOB_FIELDS.map((_, i) => '$' + (i + 2)).join(',');
+  // Only insert fields the caller actually supplied, so the column defaults in
+  // schema.sql (status, service_type, priority) still apply instead of being
+  // overwritten with nulls.
+  const cols = ['job_number'];
+  const params = [await nextJobNumber()];
+  for (const f of JOB_FIELDS) {
+    if (b[f] !== undefined && b[f] !== null && b[f] !== '') { cols.push(f); params.push(b[f]); }
+  }
+  const ph = params.map((_, i) => '$' + (i + 1)).join(',');
   const { rows } = await q(
-    `INSERT INTO jobs (job_number,${cols}) VALUES ($1,${ph}) RETURNING *`, [jn, ...vals]
+    `INSERT INTO jobs (${cols.join(',')}) VALUES (${ph}) RETURNING *`, params
   );
   if (rows[0].assigned_to && rows[0].status === 'Pending') {
     await q("UPDATE jobs SET status='Assigned' WHERE id=$1", [rows[0].id]);

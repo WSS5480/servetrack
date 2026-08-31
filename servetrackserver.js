@@ -2797,7 +2797,7 @@ return { q, pool, init, createCompany, DEFAULT_TEMPLATE };
 })();
 
 const app = express();
-const BUILD = '2026-08-31.19';           // shown in Setup so uploads can be confirmed
+const BUILD = '2026-08-31.20';           // shown in Setup so uploads can be confirmed
 const PORT = process.env.PORT || 3000;
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const TZ = process.env.TIMEZONE || 'America/New_York';
@@ -3130,9 +3130,15 @@ app.post('/api/me/password', auth, wrap(async (req, res) => {
 /* --------------------------------------------------------------- users --- */
 
 app.get('/api/users', auth, wrap(async (req, res) => {
+  /* The platform operator is not one of a company's people. Their local record
+     has to sit in some company for the app to have anywhere to put it, but it
+     must never show up in a customer's team list, their "assign to" menus, or
+     their pay statements — the company's staff are their own. Only an owner
+     sees owners. */
+  const hideOwners = req.user.role === 'owner' ? '' : " AND role <> 'owner'";
   const { rows } = await q(
     `SELECT id,name,email,role,phone,license_no,county,default_pay,active FROM users
-     WHERE company_id=$1 ORDER BY active DESC, name`, [req.companyId]
+     WHERE company_id=$1${hideOwners} ORDER BY active DESC, name`, [req.companyId]
   );
   res.json(rows);
 }));
@@ -3197,11 +3203,18 @@ app.patch('/api/users/:id', auth, admin, wrap(async (req, res) => {
   const b = req.body;
   let centralNote = null;
   if (b.password) {
+    /* This ran before any of the checks below it, and it was scoped to nothing:
+       an id was enough to set anyone's password, in any company, including an
+       owner's. The same two rules that guard the update below now guard it —
+       your own company only, and never an owner unless you are one. */
     const pw = String(b.password);
-    await q('UPDATE users SET password_hash=$1 WHERE id=$2', [await bcrypt.hash(pw, 10), req.params.id]);
-    const { rows: who } = await q('SELECT email,name FROM users WHERE id=$1 AND company_id=$2',
-      [req.params.id, req.companyId]);
-    if (who.length) centralNote = (await centralReset(who[0].email, pw, who[0].name)).note;
+    const { rows: who } = await q(
+      `SELECT email,name FROM users WHERE id=$1 AND company_id=$2 AND (role <> 'owner' OR $3)`,
+      [req.params.id, req.companyId, req.user.role === 'owner']);
+    if (!who.length) return res.status(404).json({ error: 'No such person in your company' });
+    await q('UPDATE users SET password_hash=$1 WHERE id=$2 AND company_id=$3',
+      [await bcrypt.hash(pw, 10), req.params.id, req.companyId]);
+    centralNote = (await centralReset(who[0].email, pw, who[0].name)).note;
   }
   // An admin cannot promote anybody to owner, and cannot touch the owner.
   const newRole = b.role === undefined ? null

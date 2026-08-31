@@ -1,0 +1,207 @@
+<title>ServeTrack Handbook</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+<style>
+:root{
+  --paper:#F5F7FA; --card:#FFFFFF; --ink:#1B2A3A; --sub:#5B6B7C;
+  --line:#D9E0E8; --accent:#2B5B8C; --accent-ink:#234B74;
+  --chip:#EBF0F6; --note-bg:#FDF6E6; --note-line:#E8D6A8; --note-ink:#7A5410;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#131A22; --card:#1B242F; --ink:#E6EBF1; --sub:#93A3B4;
+    --line:#2B3745; --accent:#6FA3D8; --accent-ink:#8FB8E4;
+    --chip:#242F3C; --note-bg:#2A2313; --note-line:#4D3E1C; --note-ink:#E0B860;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#131A22; --card:#1B242F; --ink:#E6EBF1; --sub:#93A3B4;
+  --line:#2B3745; --accent:#6FA3D8; --accent-ink:#8FB8E4;
+  --chip:#242F3C; --note-bg:#2A2313; --note-line:#4D3E1C; --note-ink:#E0B860;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font:16px/1.6 "Source Sans 3",-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+.wrap{max-width:700px;margin:0 auto;padding:28px 18px 80px}
+h1,h2{font-family:Bitter,Georgia,serif;text-wrap:balance;line-height:1.2}
+h1{font-size:30px;margin:8px 0 6px}
+h2{font-size:21px;margin:36px 0 10px;padding-top:16px;border-top:3px solid var(--accent)}
+p{margin:10px 0}
+a{color:var(--accent-ink)}
+.kicker{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);font-weight:700}
+.lede{font-size:17.5px;color:var(--sub);margin:6px 0 0}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.88em;
+  background:var(--chip);border-radius:5px;padding:1px 6px}
+details{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+summary{cursor:pointer;padding:12px 14px;font-weight:700;font-size:15.5px;list-style:none;
+  display:flex;align-items:baseline;gap:10px}
+summary::before{content:"›";color:var(--accent-ink);font-weight:700;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+summary:focus-visible{outline:2px solid var(--accent);border-radius:10px}
+@media (prefers-reduced-motion: reduce){summary::before{transition:none}}
+.body{padding:0 16px 14px;border-top:1px solid var(--line)}
+.body ol{margin:10px 0 4px;padding-left:22px}
+.body ol li{margin:7px 0}
+.body ul{margin:8px 0 4px;padding-left:20px}
+.body ul li{margin:6px 0}
+.tag{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  background:var(--chip);color:var(--sub);border-radius:5px;padding:2px 7px;margin-left:auto;flex-shrink:0}
+.note{background:var(--note-bg);border:1px solid var(--note-line);color:var(--note-ink);
+  border-radius:10px;padding:12px 14px;margin:14px 0;font-size:15px}
+.footer{margin-top:52px;color:var(--sub);font-size:13.5px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+
+<div class="wrap">
+<div class="kicker">ServeTrack</div>
+<h1>ServeTrack Handbook</h1>
+<p class="lede">Jobs, service attempts, affidavits and billing for a process
+serving company — from the phone in your pocket.
+Sign in at <code>servetrack.onrender.com</code>.</p>
+
+<h2>Getting in</h2>
+
+<details open>
+  <summary>Set up your account with an access code <span class="tag">everyone</span></summary>
+  <div class="body">
+    <ol>
+      <li>Open <code>servetrack.onrender.com</code> and tap
+      <b>"Set up your account"</b> under the sign-in form.</li>
+      <li>Type the access code you were given, your name, email, and a password
+      of at least 8 characters.</li>
+      <li>That's it — you're in, and from then on you sign in with just the
+      email and password.</li>
+    </ol>
+    <p>Forgot your password? Your administrator can set you a new one from
+    Setup; use it to sign in, then change it under Setup → My account.</p>
+  </div>
+</details>
+
+<h2>Running the company</h2>
+<p style="color:var(--sub)">For administrators. Your company's jobs, clients and
+billing are yours alone — nobody outside your company can see them.</p>
+
+<details open>
+  <summary>Create a job from the court papers <span class="tag">admin</span></summary>
+  <div class="body">
+    <ol>
+      <li><b>Jobs → + New job</b>.</li>
+      <li>Upload the summons or citation PDF. The case number, court, parties
+      and service address read themselves into the form. (A photo-scan can't be
+      read — the app will say so, and you type it in instead.)</li>
+      <li>Pick the client, the fee, the server's pay, and who's serving it.</li>
+      <li>Save. The job numbers itself (<code>ST-10001</code>, <code>ST-10002</code>…)
+      and shows up on that server's My Day immediately.</li>
+    </ol>
+  </div>
+</details>
+
+<details>
+  <summary>Add people to your team <span class="tag">admin</span></summary>
+  <div class="body">
+    <ol>
+      <li><b>Setup → Access codes</b> → create a code (choose Field server or
+      Admin, set their default pay per serve).</li>
+      <li>Text them the code — they set up their own account with it and land on
+      your team.</li>
+    </ol>
+    <p>Or add them yourself under <b>Setup → Add person</b>. Deactivating someone
+    (Setup → their name → Deactivated) keeps their history but ends their access.</p>
+  </div>
+</details>
+
+<details>
+  <summary>Affidavit templates <span class="tag">admin</span></summary>
+  <div class="body">
+    <p><b>Setup → Templates.</b> Write the affidavit your courts expect once, with
+    merge fields like <code>&#123;&#123;recipient_name&#125;&#125;</code>,
+    <code>&#123;&#123;served_date&#125;&#125;</code> and
+    <code>&#123;&#123;attempts_list&#125;&#125;</code> where the real details go.
+    Every served job can then print a finished affidavit — details, attempt
+    history and GPS merged in — ready for the notary. Any photos your servers
+    took print behind it as <b>Exhibit A</b>, each one captioned with the attempt
+    it belongs to and the date and time it was taken. Mark one template as the
+    default; keep others for different jurisdictions.</p>
+  </div>
+</details>
+
+<details>
+  <summary>Bill clients, pay servers <span class="tag">admin</span></summary>
+  <div class="body">
+    <ol>
+      <li><b>Bill → Invoices</b>: pick a client and a date range. Every served,
+      un-invoiced job in the period lines itself up — preview, create, print,
+      and mark Paid when the check clears.</li>
+      <li><b>Bill → Statements</b>: the same for what you owe a server — their
+      completed serves gathered into a printable pay statement.</li>
+    </ol>
+    <p>A job can only ever sit on one invoice and one statement, so nothing is
+    billed twice. Both print under your company's name.</p>
+  </div>
+</details>
+
+<h2>Working the field</h2>
+<p style="color:var(--sub)">For field servers.</p>
+
+<details open>
+  <summary>Your day <span class="tag">server</span></summary>
+  <div class="body">
+    <ol>
+      <li><b>My Day</b> lists your open jobs, rush work first. Tap an address for
+      turn-by-turn directions in your maps app.</li>
+      <li>At the door: open the job → <b>Log attempt</b> → pick what happened —
+      Served, No Answer, Bad Address, Moved, Refused, Evading.</li>
+      <li>Your GPS position is stamped on every attempt. That's not surveillance —
+      it's what makes the affidavit hold up when service is challenged.</li>
+      <li><b>Take photos.</b> Tap <b>＋ Photo</b> on the attempt — the door, the
+      house number, a posted notice, the car in the drive. Your phone opens the
+      camera; the app shrinks each shot before sending it, so it works on a weak
+      signal. Add a caption if it needs one.</li>
+      <li>An outcome of <b>Served</b> completes the job: note who accepted it and
+      how, and a short description of the person.</li>
+    </ol>
+    <p>Forgot to photograph something? Open the job later and tap
+    <b>＋ Photo</b> on that attempt — photos can be added, captioned or deleted
+    any time.</p>
+  </div>
+</details>
+
+<details>
+  <summary>Scan instead of search <span class="tag">server</span></summary>
+  <div class="body">
+    <p>Every printed cover sheet carries a barcode. Open the <b>Scan</b> tab,
+    point the camera at it, and the job opens itself — no typing job numbers in
+    a parking lot.</p>
+  </div>
+</details>
+
+<details>
+  <summary>Print address labels <span class="tag">anyone</span></summary>
+  <div class="body">
+    <ol>
+      <li><b>Tools</b> tab → pick the jobs to label.</li>
+      <li>The app knows which labels on your current sheet are already used and
+      prints only onto the free ones — so a part-used sheet goes back in the
+      printer and keeps working until it's gone.</li>
+      <li>Loaded a new sheet? Tap <b>Fresh sheet</b> first.</li>
+    </ol>
+  </div>
+</details>
+
+<h2>Good to know</h2>
+
+<div class="note"><b>The first open of the day can be slow.</b>
+After a quiet spell the service takes up to a minute to wake. Once it's awake,
+it's quick all day.</div>
+
+<div class="note"><b>Your password is yours to change.</b>
+Setup → My account. You'll need your current password to set a new one.</div>
+
+<p>What ServeTrack stores and who can see it is written plainly in the
+<a href="https://servetrack.onrender.com/privacy">privacy statement</a> — including
+the GPS on attempts, the photos your servers take, and exactly what the platform
+operator can and cannot see of your company's cases. Photos are the one thing the
+operator is refused outright, even in support view: a face at a door cannot be
+blurred into a shape the way a name can.</p>
+
+<p class="footer">ServeTrack Handbook · written 31 August 2026 against build
+2026-08-31.18.</p>
+</div>

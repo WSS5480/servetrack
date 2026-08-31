@@ -2,12 +2,12 @@
   "name": "servetrack",
   "version": "1.0.0",
   "description": "Process serving management: jobs, GPS attempts, affidavits, invoices, contractor pay",
-  "main": "servetrack-server.js",
+  "main": "servetrackserver.js",
   "directories": {
     "lib": "lib"
   },
   "scripts": {
-    "start": "node servetrack-server.js"
+    "start": "node servetrackserver.js"
   },
   "keywords": [],
   "author": "",
